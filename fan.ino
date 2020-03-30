@@ -1,25 +1,56 @@
 /*
- * module is a esp-12
- * flash size set to 4M (1M SPIFFS)
+ * module is a esp-12  (Generic ESP8266 Module)
+ * flash size set to 4MB (FS:1MB OTA:~1019KB)
  */
 
+/*
+ * todo:
+ *  - fix compile
+ *  - add ota
+ *  - add mqtt
+ *  - drop alexa support (and make it work via node red?)
+ */
+
+/*
+ * library sources:
+ * ESP8266WiFi, ESP8266WebServer, FS, DNSServer, Hash, EEPROM, ArduinoOTA - https://github.com/esp8266/Arduino
+ * WebSocketsServer - https://github.com/Links2004/arduinoWebSockets (git)
+ * WiFiManager - https://github.com/tzapu/WiFiManager (git)
+ * ESPAsyncTCP - https://github.com/me-no-dev/ESPAsyncTCP (git)
+ * ESPAsyncUDP - https://github.com/me-no-dev/ESPAsyncUDP (git)
+ * PubSub - https://github.com/knolleary/pubsubclient (git)
+ * TimeLib - https://github.com/PaulStoffregen/Time (git)
+ * Timezone - https://github.com/JChristensen/Timezone (git)
+ * ArduinoJson - https://github.com/bblanchon/ArduinoJson  (git)
+ * Espalexa - https://github.com/Aircoookie/Espalexa (git)
+ */
 
 #include <ESP8266WiFi.h>
 #include <WebSocketsServer.h>
 #include <Hash.h>
 #include <TimeLib.h> 
-//#include <Timezone.h>
+#include <Timezone.h>
+
+//US Eastern Time Zone (New York, Detroit)
+TimeChangeRule myDST = {"EDT", Second, Sun, Mar, 2, -240};    //Daylight time = UTC - 4 hours
+TimeChangeRule mySTD = {"EST", First, Sun, Nov, 2, -300};     //Standard time = UTC - 5 hours
+Timezone myTZ(myDST, mySTD);
+
+// --------------------------------------------
+
+// web server library includes
+#include <ESP8266WebServer.h>
 #include <ArduinoJson.h>
 #include <EEPROM.h>
 
 // --------------------------------------------
 
-#include <ESP8266WebServer.h>
+// file system (spiffs) library includes
 #include <FS.h>
 
 // --------------------------------------------
 
-// wifi manager includes
+// wifi manager library includes
 #include <DNSServer.h>
 #include <WiFiManager.h>
 
@@ -35,11 +66,6 @@
 #include <Espalexa.h>
 
 // --------------------------------------------
-
-//US Eastern Time Zone (New York, Detroit)
-//TimeChangeRule myDST = {"EDT", Second, Sun, Mar, 2, -240};    //Daylight time = UTC - 4 hours
-//TimeChangeRule mySTD = {"EST", First, Sun, Nov, 2, -300};     //Standard time = UTC - 5 hours
-//Timezone myTZ(myDST, mySTD);
 
 const char *weekdayNames[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
@@ -261,16 +287,11 @@ void setupTime(void) {
       secsSince1900 |= (unsigned long)buf[43];
       time_t utc = secsSince1900 - 2208988800UL;
     
-    // cpd..hack until timezone is fixed
-//      utc -= 60 * 60 * 4;  // spring foward
-      utc -= 60 * 60 * 5;  // fall back
-      setTime(utc);
+      TimeChangeRule *tcr;
+      time_t local = myTZ.toLocal(utc, &tcr);
+      Serial.printf("\ntime zone %s\n", tcr->abbrev);
     
-//      TimeChangeRule *tcr;
-//      time_t local = myTZ.toLocal(utc, &tcr);
-//      Serial.printf("\ntime zone %s\n", tcr->abbrev);
-//    
-//      setTime(local);
+      setTime(local);
     
       // just print out the time
       printTime(false, true);
