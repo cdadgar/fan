@@ -5,7 +5,6 @@
 
 /*
  * todo:
- *  - fix compile
  *  - add ota
  *  - add mqtt
  *  - drop alexa support (and make it work via node red?)
