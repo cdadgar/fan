@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html>
+<head>
+<link rel="icon" type="image/x-icon" href="favicon.ico"/>
+<link rel='stylesheet' href='https://ajax.googleapis.com/ajax/libs/jqueryui/1.11.4/themes/smoothness/jquery-ui.css'>
+<script src='https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js'></script>
+<script src='https://ajax.googleapis.com/ajax/libs/jqueryui/1.11.4/jquery-ui.min.js'></script>
+<script src='common.js'></script>
+<script>
+$(document).ready(function(){
+  initGui();
+  initWebsocket('');
+});
+
+function message(msg){
+console.log('onmessage ' + msg.data);
+  var obj = JSON.parse(msg.data);
+  if (obj.command == 'mode')
+    $('#' + obj.command + obj.value).prop('checked', true).button('refresh');
+  else {
+    $('#' + obj.command).html(obj.value);
+  }
+}
+
+function initGui(){
+  if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent))
+    document.body.style.zoom = '380%';
+  else
+    document.body.style.zoom = '150%';
+
+  $('#mode').buttonset();
+  
+  $(':radio').click(function() {
+    var json = {
+      command: this.name,
+      value: this.value
+    };
+    socket.send(JSON.stringify(json));
+  });
+
+  $('#prog').button().click(function(event) {
+   window.location.href='./program.htm';
+  });
+
+  $('#setup').button().click(function(event) {
+    window.location.href='./setup.htm';
+  });
+
+  $('#off').button().click(function(event) {
+	  send(0);
+  });
+
+  $('#low').button().click(function(event) {
+	  send(1);
+  });
+
+  $('#medium').button().click(function(event) {
+	  send(2);
+  });
+
+  $('#high').button().click(function(event) {
+	  send(3);
+  });
+
+  $('#direction').button().click(function(event) {
+	  send(4);
+  });
+
+  $('#top').button().click(function(event) {
+	  send(5);
+  });
+
+  $('#bottom').button().click(function(event) {
+	  send(6);
+  });
+}
+
+function send(value) {
+  var json = {
+    command: 'button',
+    value: value
+  };
+  socket.send(JSON.stringify(json));
+} 
+</script>
+</head>
+<body>
+<div id='message' style='zoom:200%;'></div>
+<div id='controls'>
+  <div style='zoom:200%'>
+    <span id='time' class='ui-widget'></span><br>
+    <span id='modeState' class='ui-widget'></span><br>
+    <span id='status' class='ui-widget'></span><br>
+  </div>
+  <br>
+  <div id='mode'>
+    <input type='radio' id='mode0' name='mode' value='0'><label for='mode0'>Off</label>
+    <input type='radio' id='mode1' name='mode' value='1'><label for='mode1'>Run</label>
+  </div>
+  <br>
+ <button id='off'>Off</button>
+  <button id='low'>Low</button>
+  <button id='medium'>Medium</button>
+  <button id='high'>High</button>
+  <br>
+  <br>
+  <button id='direction'>Direction</button>
+  <button id='top'>Top</button>
+  <button id='bottom'>Bottom</button>
+  <br>
+  <br>
+  <button id='prog'>Program</button>
+  <button id='setup'>Setup</button>
+</div>
+</body>
+</html>

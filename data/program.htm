@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html>
+<head>
+<link rel="icon" type="image/x-icon" href="favicon.ico"/>
+<link rel='stylesheet' href='https://ajax.googleapis.com/ajax/libs/jqueryui/1.11.4/themes/smoothness/jquery-ui.css'>
+<style>
+.text { display: inline-block; width: 75px; }
+</style>
+<script src='https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js'></script>
+<script src='https://ajax.googleapis.com/ajax/libs/jqueryui/1.11.4/jquery-ui.min.js'></script>
+<script src='common.js'></script>
+<script>
+var program;
+var numPrograms, numTimes;
+var socket;
+var selectedProgram = -1;
+
+$(document).ready(function(){
+  initWebsocket('program');
+});
+
+function message(msg){
+  console.log('onmessage ' + msg.data + ' ' + msg.data.length);
+  var obj = JSON.parse(msg.data);
+  program = obj.value;
+  numPrograms = program.length;
+  console.log('numPrograms',numPrograms);
+  numTimes = program[0][2].length;
+  console.log('numTimes',numTimes);
+
+  initGui();
+
+  $('#program0').attr('checked', true).button('refresh');
+  loadProgram(0);
+}
+
+function createTimeDropdown() {
+	  var str = "";
+	  str += "<option value='255'>Off</option>";
+	  for (var i=0; i < 96; ++i) {
+	    var ampm = 'am';
+	    var h = Math.floor(i/4);
+	    var m = i%4*15;
+	    if (m==0)
+	      m = '00';
+	    if (h==0)
+	      h = 12;
+	    else if (h==12)
+	      ampm = 'pm';
+	    else if (h > 12) {
+	      h -= 12;
+	      ampm = 'pm';
+	    }
+	    var time = h + ':' + m + ampm;
+	    str += "<option value='"+i+"'>"+time+"</option>";
+	  }
+	  str += '</select>';
+	  return str;
+	}
+
+function createActionDropdown() {
+	  var str = "";
+	  str += "<option value='0'>Off</option>";
+	  str += "<option value='1'>Low</option>";
+	  str += "<option value='2'>Medium</option>";
+	  str += "<option value='3'>High</option>";
+	  str += "<option value='4'>Direction</option>";
+	  str += "<option value='5'>Top</option>";
+	  str += "<option value='6'>Bottom</option>";
+	  str += '</select>';
+	  return str;
+	}
+
+function initGui(){
+  if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent))
+    document.body.style.zoom = '260%';
+  else
+    document.body.style.zoom = '120%';
+
+  // create the program buttons
+  var programs = $('#programs');
+  for (var i=0; i < numPrograms ; ++i) {
+    programs.append("<input id='program"+i+"' name='programs' type='radio' value='"+i+"'/><label for='program"+i+"'>Prog "+(i+1)+"</label>");
+  }
+  programs.buttonset();
+  $(':radio').click(function() {
+    // save the state of the program we're leaving
+    if (selectedProgram != 255 )
+      saveProgram(selectedProgram);
+    loadProgram(this.value);
+  });
+  $('#program0').attr('checked', true).button('refresh');
+
+  // create the day buttons
+  var names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  var days = $('#days');
+  for (var i=0; i < 7; ++i) {
+    days.append("<input id='"+names[i]+"' type='checkbox' value='"+i+"'/><label style='font-size:14px;' for='"+names[i]+"'>"+names[i]+"</label>");
+  }
+  days.buttonset();
+
+  // create the time dropdowns
+  var times = $('#times');
+  var str = "<label class='text' for='time'>Start Time:</label>";
+  for (var j=0; j < numTimes; ++j) {
+    str += "&nbsp;&nbsp;<select name='startTime"+j+"' id='startTime"+j+"'>";
+    str += createTimeDropdown();
+  }
+  str += "<br><br><label class='text' for='action'>Action:</label>";
+  for (var j=0; j < numTimes; ++j) {
+    str += "&nbsp;&nbsp;<select name='action"+j+"' id='action"+j+"'>";
+    str += createActionDropdown();
+  }
+  times.append(str);
+
+
+  $('#save').button().click(function(event) {
+    doSave();
+    close();
+  });
+
+  $('#cancel').button().click(function(event) {
+    close();
+  });
+}
+
+function close() {
+  window.location.href='index.htm';
+}
+
+function doSave() {
+  saveProgram(selectedProgram);
+  var json = {
+    command: 'saveProgram',
+    value: program
+  };
+console.log(JSON.stringify(json));
+  socket.send(JSON.stringify(json));
+} 
+
+function saveProgram(num) {
+  program[num][0] = $('#isEnabled').is(':checked') ? 1 : 0;
+
+  var days = 0;
+  $('input:checkbox:checked').each(function() {
+    if ($(this).attr('id') == 'isEnabled')
+      return;
+    days |= 1 << this.value;
+  });
+  program[num][1] = days;
+
+  for (var i=0; i < numTimes; ++i) {
+	program[num][2][i] = parseInt($('#startTime'+i).val());
+	program[num][3][i] = parseInt($('#action'+i).val());
+  }
+}
+
+function loadProgram(num) {
+  selectedProgram = num;
+  var prog = program[num];
+
+  var isEnabled = prog[0];
+  $('#isEnabled').prop('checked', isEnabled==1);
+
+  var days = prog[1];
+  $('input:checkbox').each(function() {
+    if ($(this).attr('id') == 'isEnabled')
+      return;
+    if (((1 << this.value) & days) != 0)
+      $(this).prop('checked', true).button('refresh');
+    else
+      $(this).prop('checked', false).button('refresh');
+  });
+
+  var startTimes = prog[2];
+  var actions = prog[3];
+  for (var i=0; i < numTimes; ++i) {
+    $('#startTime'+i).val(startTimes[i]);
+    $('#action'+i).val(actions[i]);
+  }
+}
+</script>
+</head>
+<body>
+<div id='message' style='zoom:200%;'></div>
+<div id='controls'>
+  <div id='programs'></div><br>
+  <div id='days'></div><br>
+  <input type='checkbox' id='isEnabled'>Program Enabled<br><br>
+  <div id='times'></div><br>
+  <button id='save'>Save</button>
+  <button id='cancel'>Cancel</button>
+</div>
+</body>
+</html>
