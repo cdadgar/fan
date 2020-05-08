@@ -53,11 +53,29 @@ Timezone myTZ(myDST, mySTD);
 #include <DNSServer.h>
 #include <WiFiManager.h>
 
+WiFiManager wifiManager;
+String ssid;
+
 // --------------------------------------------
 
 // aync library includes
 #include <ESPAsyncTCP.h>
 #include <ESPAsyncUDP.h>
+
+// --------------------------------------------
+
+// mqtt library includes
+#include <PubSubClient.h>
+
+// --------------------------------------------
+
+// arduino ota library includes
+#include <ArduinoOTA.h>
+
+#include <WiFiClient.h>
+#include <ESP8266mDNS.h>
+#include <ESP8266HTTPUpdateServer.h>
+ESP8266HTTPUpdateServer httpUpdater;
 
 // --------------------------------------------
 
@@ -102,7 +120,6 @@ programType program[NUM_PROGRAMS];
 Espalexa espalexa;
 ESP8266WebServer server(80);
 File fsUploadFile;
-bool isUploading;
 
 WebSocketsServer webSocket = WebSocketsServer(81);
 int webClient = -1;
@@ -111,11 +128,22 @@ int setupClient = -1;
 
 bool isTimeSet = false;
 
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+#define HOST_NAME "FAN"
+#define MQTT_IP_ADDR "192.168.1.210"
+#define MQTT_IP_PORT 1883
+
 bool isPromModified;
 bool isMemoryReset = false;
 //bool isMemoryReset = true;
 
 typedef struct {
+  char host_name[17];
+  char mqtt_ip_addr[17];
+  int mqtt_ip_port;
+  byte use_mqtt;
   byte mode;
 } configType;
 
@@ -170,17 +198,18 @@ void setup(void) {
 
   setupTime();
   setupWebServer();  
+  setupMqtt();
+  setupOta();
 
   webSocket.begin();
   webSocket.onEvent(webSocketEvent);
     
   lastMinutes = 0;
 
-  isUploading = false;
-
   isSetup = true;
   modeChange();
 }
+
 
 void setupOutputs(void) {
   int numOutputs = sizeof(outputs)/sizeof(outputs[0]);
@@ -189,6 +218,7 @@ void setupOutputs(void) {
     digitalWrite(outputs[i], DEFAULT_OUTPUT);
   }
 }
+
 
 void initProgram(void) {
 /*
@@ -221,28 +251,35 @@ time starts at 12am = 0, and goes in 15 minute increments
   saveProgramConfig(); 
 }
 
-#define AP_NAME "Fan"
+
+void printName() {
+  if (webClient == -1)
+    return;
+    
+  sendWeb("name", config.host_name);
+}
+
 
 void configModeCallback(WiFiManager *myWiFiManager) {
   // this callback gets called when the enter AP mode, and the users
   // need to connect to us in order to configure the wifi
   Serial.print(F("\n\nJoin: "));
-  Serial.println(AP_NAME);
+  Serial.println(config.host_name);
   Serial.print(F("Goto: "));
   Serial.println(WiFi.softAPIP());
   Serial.println();
 }
 
+
 bool setupWifi(void) {
-  WiFi.hostname("fan");
+  WiFi.hostname(config.host_name);
   
-  WiFiManager wifiManager;
 //  wifiManager.setDebugOutput(false);
   
   //reset settings - for testing
   //wifiManager.resetSettings();
 
-  String ssid = WiFi.SSID();
+  ssid = WiFi.SSID();
   if (ssid.length() > 0) {
     Serial.print(F("Connecting to "));
     Serial.println(ssid);
@@ -251,7 +288,7 @@ bool setupWifi(void) {
   //set callback that gets called when connecting to previous WiFi fails, and enters Access Point mode
   wifiManager.setAPCallback(configModeCallback);
 
-  if(!wifiManager.autoConnect(AP_NAME)) {
+  if(!wifiManager.autoConnect(config.host_name)) {
     Serial.println(F("failed to connect and hit timeout"));
     //reset and try again, or maybe put it to deep sleep
     ESP.reset();
@@ -351,26 +388,31 @@ void printModeState(void) {
   }
 }
 
+
 void loop(void)
 {
-  if (isUploading) {
-    // you can omit this line from your code since it will be called in espalexa.loop()
-    // server.handleClient();
-    espalexa.loop();
-    return;
-  }
-  
   if (!isSetup)
     return;
    
   checkTimeMinutes();
 
   webSocket.loop();
-  
   // you can omit this line from your code since it will be called in espalexa.loop()
   // server.handleClient();
   espalexa.loop();
+  MDNS.update();
+  
+  // mqtt
+  if (config.use_mqtt) {
+    if (!client.connected()) {
+      reconnect();
+    }
+    client.loop();
+  }
+
+  ArduinoOTA.handle();
 }
+
 
 void checkTimeMinutes() {
   int minutes = minute();
@@ -389,6 +431,7 @@ void checkTimeMinutes() {
   printTime(true, false);
 }
 
+
 void modeChange(void) {
   saveConfig();
 
@@ -396,11 +439,13 @@ void modeChange(void) {
   printModeState();
 }
 
+
 void sendWeb(const char *command, const char *value) {
   char json[128];
   sprintf(json, "{\"command\":\"%s\",\"value\":\"%s\"}", command, value);
   webSocket.sendTXT(webClient, json, strlen(json));
 }
+
 
 void printTime(bool isCheckProgram, bool isTest) {
   int dayOfWeek = weekday()-1;
@@ -435,6 +480,7 @@ void printTime(bool isCheckProgram, bool isTest) {
   }
 }
 
+
 void startProgram(int index, int startIndex) {
   printModeState();
 
@@ -442,6 +488,7 @@ void startProgram(int index, int startIndex) {
   Serial.printf("starting program %d-%d: %d\n", (index+1), (startIndex+1), action);
   doAction(action);
 }
+
 
 void doAction(int action) {
   // press the button for 500 msec
@@ -454,6 +501,7 @@ void doAction(int action) {
   if (webClient != -1)
     sendWeb("status", actionNames[action]);
 }
+
 
 void checkProgram(int day, int h, int m) {
   if (config.mode == OFF)
@@ -485,16 +533,19 @@ void checkProgram(int day, int h, int m) {
   // no programs were matches
 }
 
+
 #define MAGIC_NUM   0xAD
 
 #define MAGIC_NUM_ADDRESS      0
 #define CONFIG_ADDRESS         1
 #define PROGRAM_ADDRESS        CONFIG_ADDRESS + sizeof(config)
 
+
 void set(char *name, const char *value) {
   for (int i=strlen(value); i >= 0; --i)
     *(name++) = *(value++);
 }
+
 
 void loadConfig(void) {
   int magicNum = EEPROM.read(MAGIC_NUM_ADDRESS);
@@ -506,6 +557,10 @@ void loadConfig(void) {
   if (isMemoryReset) {
     // nothing saved in eeprom, use defaults
     Serial.println(F("using default config"));
+    set(config.host_name, HOST_NAME);
+    set(config.mqtt_ip_addr, MQTT_IP_ADDR);
+    config.mqtt_ip_port = MQTT_IP_PORT;
+    config.use_mqtt = 0;
     config.mode = OFF;
 
     saveConfig();
@@ -517,8 +572,13 @@ void loadConfig(void) {
       *ptr = EEPROM.read(addr++);
   }
 
+  Serial.printf("host_name %s\n", config.host_name);
+  Serial.printf("use_mqtt %d\n", config.use_mqtt);
+  Serial.printf("mqqt_ip_addr %s\n", config.mqtt_ip_addr);
+  Serial.printf("mqtt_ip_port %d\n", config.mqtt_ip_port);
   Serial.printf("mode %d\n", config.mode);
 }
+
 
 void loadProgramConfig(void) {
   if (isMemoryReset) {
@@ -535,6 +595,7 @@ void loadProgramConfig(void) {
   }
 }
 
+
 void saveConfig(void) {
   isPromModified = false;
   update(MAGIC_NUM_ADDRESS, MAGIC_NUM);
@@ -548,12 +609,83 @@ void saveConfig(void) {
     EEPROM.commit();
 }
 
+
 void update(int addr, byte data) {
   if (EEPROM.read(addr) != data) {
     EEPROM.write(addr, data);
     isPromModified = true;
   }
 }
+
+
+void setupOta(void) {
+  // Port defaults to 8266
+  // ArduinoOTA.setPort(8266);
+
+  // Hostname defaults to esp8266-[ChipID]
+  ArduinoOTA.setHostname(config.host_name);
+
+  // No authentication by default
+  // ArduinoOTA.setPassword("admin");
+
+  // Password can be set with it's md5 value as well
+  // MD5(admin) = 21232f297a57a5a743894a0e4a801fc3
+  // ArduinoOTA.setPasswordHash("21232f297a57a5a743894a0e4a801fc3");
+
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) {
+      type = "sketch";
+    } else { // U_FS
+      type = "filesystem";
+    }
+
+    // NOTE: if updating FS this would be the place to unmount FS using FS.end()
+    Serial.println("Start updating " + type);
+  });
+  
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nEnd");
+  });
+  
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+  
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    const char *msg = "Unknown Error";
+    if (error == OTA_AUTH_ERROR) {
+      msg = "Auth Failed";
+    } else if (error == OTA_BEGIN_ERROR) {
+      msg = "Begin Failed";
+    } else if (error == OTA_CONNECT_ERROR) {
+      msg = "Connect Failed";
+    } else if (error == OTA_RECEIVE_ERROR) {
+      msg = "Receive Failed";
+    } else if (error == OTA_END_ERROR) {
+      msg = "End Failed";
+    }
+    Serial.println(msg);
+  });
+  
+  ArduinoOTA.begin();
+  Serial.println("Arduino OTA ready");
+
+  char host[20];
+  sprintf(host, "%s-webupdate", config.host_name);
+  MDNS.begin(host);
+  httpUpdater.setup(&server);
+  MDNS.addService("http", "tcp", 80);
+  Serial.println("Web OTA ready");
+}
+
+
+void setupMqtt() {
+  client.setServer(config.mqtt_ip_addr, config.mqtt_ip_port);
+  client.setCallback(callback);
+}
+
 
 void saveProgramConfig(void) {
   isPromModified = false;
@@ -566,6 +698,7 @@ void saveProgramConfig(void) {
   if (isPromModified)
     EEPROM.commit();
 }
+
 
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght) {
   switch(type) {
@@ -588,6 +721,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
         webClient = num;
       
         // send the current state
+        printName();
         printModeState();
         printTime(false, false);
       }
@@ -615,6 +749,11 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
         strcpy(json, "{");
         sprintf(json+strlen(json), "\"date\":\"%s\"", __DATE__);
         sprintf(json+strlen(json), ",\"time\":\"%s\"", __TIME__);
+        sprintf(json+strlen(json), ",\"host_name\":\"%s\"", config.host_name);
+        sprintf(json+strlen(json), ",\"use_mqtt\":\"%d\"", config.use_mqtt);
+        sprintf(json+strlen(json), ",\"mqtt_ip_addr\":\"%s\"", config.mqtt_ip_addr);
+        sprintf(json+strlen(json), ",\"mqtt_ip_port\":\"%d\"", config.mqtt_ip_port);
+        sprintf(json+strlen(json), ",\"ssid\":\"%s\"", ssid.c_str());
         strcpy(json+strlen(json), "}");
 //        Serial.printf("len %d\n", strlen(json));
         webSocket.sendTXT(setupClient, json, strlen(json));
@@ -634,12 +773,23 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
           ptr = strstr(ptr, target) + strlen(target)+3;
           config.mode = strtol(ptr, &ptr, 10);
           modeChange();
+
+          // cpd...do mqtt
+          // mqtt
+//          char topic[30];
+//          sprintf(topic, "%s/fan", config.host_name);
+//          client.publish(topic, ((nightlightState == LOW) ? "off" : "on"));
         }        
         else if (strncmp(ptr,"button",6) == 0) {
           target = "value";
           ptr = strstr(ptr, target) + strlen(target)+2;
           int action = strtol(ptr, &ptr, 10);
           doAction(action);
+
+          // cpd...do mqtt
+//          char topic[30];
+//          sprintf(topic, "%s/fan", config.host_name);
+//          client.publish(topic, ((nightlightState == LOW) ? "off" : "on"));
         }        
       }
       else if (num == programClient) {
@@ -672,9 +822,37 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
         if (strncmp(ptr,"reboot",6) == 0) {
           ESP.restart();
         }
+        else if (strncmp(ptr,"wifi",4) == 0) {
+          wifiManager.resetSettings();
+          ESP.restart();
+        }
         else if (strncmp(ptr,"save",4) == 0) {
           Serial.printf("save setup\n");
           
+          const char *target = "host_name";
+          char *ptr = strstr((char *)payload, target) + strlen(target)+3;
+          char *end = strchr(ptr, '\"');
+          memcpy(config.host_name, ptr, (end-ptr));
+          config.host_name[end-ptr] = '\0';
+
+          target = "use_mqtt";
+          ptr = strstr((char *)payload, target) + strlen(target)+3;
+          config.use_mqtt = strtol(ptr, &ptr, 10);
+
+          target = "mqtt_ip_addr";
+          ptr = strstr((char *)payload, target) + strlen(target)+3;
+          end = strchr(ptr, '\"');
+          memcpy(config.mqtt_ip_addr, ptr, (end-ptr));
+          config.mqtt_ip_addr[end-ptr] = '\0';
+
+          target = "mqtt_ip_port";
+          ptr = strstr((char *)payload, target) + strlen(target)+3;
+          config.mqtt_ip_port = strtol(ptr, &ptr, 10);
+
+          Serial.printf("host_name %s\n", config.host_name);
+          Serial.printf("use_mqtt %d\n", config.use_mqtt);
+          Serial.printf("mqtt_ip_addr %s\n", config.mqtt_ip_addr);
+          Serial.printf("mqtt_ip_port %d\n", config.mqtt_ip_port);
           saveConfig();
         }
       }
@@ -682,41 +860,6 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
   }
 }
 
-void setUpOta(void) {
-  server.on("/update", HTTP_POST, [](){
-    server.sendHeader("Connection", "close");
-    server.sendHeader("Access-Control-Allow-Origin", "*");
-    server.send(200, "text/plain", (Update.hasError())?"FAIL":"OK");
-    ESP.restart();
-  },[](){
-    HTTPUpload& upload = server.upload();
-    if(upload.status == UPLOAD_FILE_START){
-      Serial.setDebugOutput(true);
-      Serial.printf("Update filename: %s\n", upload.filename.c_str());
-      uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
-      if(!Update.begin(maxSketchSpace)){//start with max available size
-        Update.printError(Serial);
-      }
-    } else if(upload.status == UPLOAD_FILE_WRITE){
-      Serial.printf("uploaded: %d\n", upload.totalSize);
-      if(Update.write(upload.buf, upload.currentSize) == upload.currentSize){
-        // update the total percent complete on the web page
-        // cpd
-      }
-      else {
-        Update.printError(Serial);
-      }
-    } else if(upload.status == UPLOAD_FILE_END){
-      if(Update.end(true)){ //true to set the size to the current progress
-        Serial.printf("Update Success: %u\nRebooting...\n", upload.totalSize);
-      } else {
-        Update.printError(Serial);
-      }
-      Serial.setDebugOutput(false);
-    }
-    yield();
-  });
-}
 
 //format bytes
 String formatBytes(size_t bytes){
@@ -730,6 +873,7 @@ String formatBytes(size_t bytes){
     return String(bytes/1024.0/1024.0/1024.0)+"GB";
   }
 }
+
 
 String getContentType(String filename){
   if(server.hasArg("download")) return "application/octet-stream";
@@ -748,6 +892,7 @@ String getContentType(String filename){
   return "text/plain";
 }
 
+
 bool handleFileRead(String path){
   Serial.println("handleFileRead: " + path);
   if(path.endsWith("/")) path += "index.htm";
@@ -763,6 +908,7 @@ bool handleFileRead(String path){
   }
   return false;
 }
+
 
 void handleFileUpload_edit(){
   HTTPUpload& upload = server.upload();
@@ -783,6 +929,7 @@ void handleFileUpload_edit(){
   }
 }
 
+
 void handleFileDelete(){
   if(server.args() == 0) return server.send(500, "text/plain", "BAD ARGS");
   String path = server.arg(0);
@@ -795,6 +942,7 @@ void handleFileDelete(){
   server.send(200, "text/plain", "");
   path = String();
 }
+
 
 void handleFileCreate(){
   if(server.args() == 0)
@@ -813,6 +961,7 @@ void handleFileCreate(){
   server.send(200, "text/plain", "");
   path = String();
 }
+
 
 void handleFileList() {
   if(!server.hasArg("dir")) {server.send(500, "text/plain", "BAD ARGS"); return;}
@@ -839,6 +988,7 @@ void handleFileList() {
   server.send(200, "text/json", output);
 }
 
+
 void countRootFiles(void) {
   int num = 0;
   size_t totalSize = 0;
@@ -852,6 +1002,7 @@ void countRootFiles(void) {
   }
   Serial.printf("FS File: serving %d files, size: %s from /\n", num, formatBytes(totalSize).c_str());
 }
+
 
 void fanChanged(uint8_t brightness) {
   Serial.print("Alexa changed to ");
@@ -869,6 +1020,7 @@ void fanChanged(uint8_t brightness) {
 //  }
 //  modeChange();
 }
+
 
 void setupWebServer(void) {
   SPIFFS.begin();
@@ -893,8 +1045,6 @@ void setupWebServer(void) {
   //second callback handles file uploads at that location
   server.on("/edit", HTTP_POST, [](){ server.send(200, "text/plain", ""); }, handleFileUpload_edit);
 
-  setUpOta();
-
   //called when the url is not defined here
   //use it to load content from SPIFFS
   server.onNotFound([](){
@@ -916,4 +1066,52 @@ void setupWebServer(void) {
   //server.begin(); //omit this since it will be done by espalexa.begin(&server)
 
   Serial.println("HTTP and alexa server started");
+}
+
+
+void reconnect() {
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+//    // Create a random client ID
+//    String clientId = "ESP8266Client-";
+//    clientId += String(random(0xffff), HEX);
+//    // Attempt to connect
+//    if (client.connect(clientId.c_str())) {
+    if (client.connect(config.host_name)) {
+      Serial.println("connected");
+      // ... and resubscribe
+      char topic[30];
+      sprintf(topic, "%s/command", config.host_name);
+      client.subscribe(topic);
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
+
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  // only topic we get is <host_name>/command or nightlight
+  
+  char value[12];
+  memcpy(value, payload, length);
+  value[length] = '\0';
+  Serial.printf("Message arrived [%s] %s\n", topic, value);
+
+//  if (strcmp(topic, "command") == 0) {
+//    // cpd...do something
+//      
+//    // also send to main display
+//    if (webClient != -1) {
+//      sendWeb("code", value);
+//    }
+//  }
+//  else {
+//    Serial.printf("Unknown topic\n");
+//  }
 }
