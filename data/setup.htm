@@ -19,6 +19,9 @@
 #mqtt_ip_port {
   width: 30px;
 }
+#fan_min_temp {
+  width: 30px;
+}
 </style>
 <script src='https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js'></script>
 <script src='https://ajax.googleapis.com/ajax/libs/jqueryui/1.11.4/jquery-ui.min.js'></script>
@@ -40,6 +43,7 @@ function message(msg){
   $('#use_mqtt').prop('checked', obj.use_mqtt=='1');
   $('#mqtt_ip_addr').val(obj.mqtt_ip_addr);
   $('#mqtt_ip_port').val(obj.mqtt_ip_port);
+  $('#fan_min_temp').val(obj.fan_min_temp);
 }
 
 function initGui() {
@@ -73,7 +77,7 @@ function initGui() {
       command: 'wifi'
     };
     socket.send(JSON.stringify(json));
-	alert('Join the FAN access point to configure the wifi');
+    alert('Join the FAN access point to configure the wifi');
   });
 
   $('#cancel').button().click(function(event) {
@@ -84,10 +88,11 @@ function initGui() {
 function doSave() {
   var json = {
     command: 'save',
-	host_name: $('#host_name').val(),
+    host_name: $('#host_name').val(),
     use_mqtt: $('#use_mqtt').is(':checked') ? '1' : '0',
-	mqtt_ip_addr: $('#mqtt_ip_addr').val(),
-	mqtt_ip_port: $('#mqtt_ip_port').val()
+    mqtt_ip_addr: $('#mqtt_ip_addr').val(),
+    mqtt_ip_port: $('#mqtt_ip_port').val(),
+    fan_min_temp: $('#fan_min_temp').val()
   };
   console.log(JSON.stringify(json));
   socket.send(JSON.stringify(json)); 
@@ -107,6 +112,7 @@ function close() {
   <input type='checkbox' id='use_mqtt'>Use MQTT<br>
   MQTT IP Address:<input id='mqtt_ip_addr'><br>
   MQTT Port:<input id='mqtt_ip_port'><br>
+  Fan Min Temp:<input id='fan_min_temp'><br>
   <br>
   <button id='spiffs'>SPIFFS</button>
   <button id='ota'>OTA Update</button><br><br>

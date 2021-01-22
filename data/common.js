@@ -9,7 +9,7 @@ function initWebsocket(page){
   $('#controls').hide();
   
   if (TEST) {
-	test();
+    test();
     return;
   }
 
@@ -21,7 +21,7 @@ function initWebsocket(page){
   else {
     if (host == 'localhost')
       host = '192.168.1.' + ADDR;
-	
+
     var port = location.port;
     if (port === '')
       port = 81;
@@ -76,10 +76,10 @@ function test() {
     // program page
     // 4 programs, 3 times
     obj.data = '{"command":"program","value":[ [0,0,[0,0,0,0],[0,0,0,0]], [0,0,[0,0,0,0],[0,0,0,0]], [0,0,[0,0,0,0],[0,0,0,0]] ]}';
-    message(obj);	  
+    message(obj);
 
     // setup page
 //    obj.data = '{"date":"5/29/16", "time":"11:01am"}';
-//    message(obj);	  
+//    message(obj);
   },1000);
 }

@@ -35,41 +35,41 @@ function message(msg){
 }
 
 function createTimeDropdown() {
-	  var str = "";
-	  str += "<option value='255'>Off</option>";
-	  for (var i=0; i < 96; ++i) {
-	    var ampm = 'am';
-	    var h = Math.floor(i/4);
-	    var m = i%4*15;
-	    if (m==0)
-	      m = '00';
-	    if (h==0)
-	      h = 12;
-	    else if (h==12)
-	      ampm = 'pm';
-	    else if (h > 12) {
-	      h -= 12;
-	      ampm = 'pm';
-	    }
-	    var time = h + ':' + m + ampm;
-	    str += "<option value='"+i+"'>"+time+"</option>";
-	  }
-	  str += '</select>';
-	  return str;
-	}
+  var str = "";
+  str += "<option value='255'>Off</option>";
+  for (var i=0; i < 96; ++i) {
+    var ampm = 'am';
+    var h = Math.floor(i/4);
+    var m = i%4*15;
+    if (m==0)
+      m = '00';
+    if (h==0)
+      h = 12;
+    else if (h==12)
+      ampm = 'pm';
+    else if (h > 12) {
+      h -= 12;
+      ampm = 'pm';
+    }
+    var time = h + ':' + m + ampm;
+    str += "<option value='"+i+"'>"+time+"</option>";
+  }
+  str += '</select>';
+  return str;
+}
 
 function createActionDropdown() {
-	  var str = "";
-	  str += "<option value='0'>Off</option>";
-	  str += "<option value='1'>Low</option>";
-	  str += "<option value='2'>Medium</option>";
-	  str += "<option value='3'>High</option>";
-	  str += "<option value='4'>Direction</option>";
-	  str += "<option value='5'>Top</option>";
-	  str += "<option value='6'>Bottom</option>";
-	  str += '</select>';
-	  return str;
-	}
+  var str = "";
+  str += "<option value='0'>Off</option>";
+  str += "<option value='1'>Low</option>";
+  str += "<option value='2'>Medium</option>";
+  str += "<option value='3'>High</option>";
+  str += "<option value='4'>Direction</option>";
+  str += "<option value='5'>Top</option>";
+  str += "<option value='6'>Bottom</option>";
+  str += '</select>';
+  return str;
+}
 
 function initGui(){
   if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent))
@@ -150,8 +150,8 @@ function saveProgram(num) {
   program[num][1] = days;
 
   for (var i=0; i < numTimes; ++i) {
-	program[num][2][i] = parseInt($('#startTime'+i).val());
-	program[num][3][i] = parseInt($('#action'+i).val());
+    program[num][2][i] = parseInt($('#startTime'+i).val());
+    program[num][3][i] = parseInt($('#action'+i).val());
   }
 }
 

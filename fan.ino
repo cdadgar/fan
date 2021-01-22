@@ -5,8 +5,6 @@
 
 /*
  * todo:
- *  - add ota
- *  - add mqtt
  */
 
 /*
@@ -16,6 +14,8 @@
  * WiFiManager - https://github.com/tzapu/WiFiManager (git)
  * ESPAsyncTCP - https://github.com/me-no-dev/ESPAsyncTCP (git)
  * ESPAsyncUDP - https://github.com/me-no-dev/ESPAsyncUDP (git)
+ * OneWire - https://github.com/PaulStoffregen/OneWire (git)
+ * DallasTemperature - https://github.com/milesburton/Arduino-Temperature-Control-Library (git)
  * PubSub - https://github.com/knolleary/pubsubclient (git)
  * TimeLib - https://github.com/PaulStoffregen/Time (git)
  * Timezone - https://github.com/JChristensen/Timezone (git)
@@ -62,6 +62,12 @@ String ssid;
 
 // --------------------------------------------
 
+// ds18b20 temperture sensor library includes
+#include <OneWire.h> 
+#include <DallasTemperature.h>
+
+// --------------------------------------------
+
 // mqtt library includes
 #include <PubSubClient.h>
 
@@ -82,6 +88,9 @@ const char *weekdayNames[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 // --------------------------------------------
 
 #define DEFAULT_OUTPUT HIGH
+#define LOW 1
+#define MEDIUM 2
+#define HIGH 3
 // note: direction is not implemented
 //                 off, low, medium, high, direction, top, bottom
 byte outputs[] = { 15,  14,  13,     12,   0,         16,  5 }; 
@@ -117,6 +126,17 @@ int webClient = -1;
 int programClient = -1;
 int setupClient = -1;
 
+// temperature
+#define ONE_WIRE_BUS 2  // gpio2
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+DeviceAddress thermometer;
+unsigned long lastTempRequest = 0;
+int delayInMillis = 0;
+#define resolution 12
+#define TEMP_ERROR -999
+float lastTemp = TEMP_ERROR;
+
 bool isTimeSet = false;
 
 WiFiClient espClient;
@@ -136,6 +156,7 @@ typedef struct {
   int mqtt_ip_port;
   byte use_mqtt;
   byte mode;
+  int fan_min_temp;
 } configType;
 
 configType config;
@@ -175,6 +196,10 @@ void setup(void) {
 
   setupOutputs();
   
+  if (!setupTemperature()) {
+//    return;
+  }
+
   if (!setupWifi())
     return;
     
@@ -258,6 +283,51 @@ void configModeCallback(WiFiManager *myWiFiManager) {
   Serial.println();
 }
 
+
+bool setupTemperature(void) {
+  sensors.begin();
+  if (sensors.getDeviceCount() != 1) {
+    Serial.println("Unable to locate temperature sensor");
+    return false;
+  }
+  if (!sensors.getAddress(thermometer, 0)) {
+    Serial.println("Unable to find address for temperature sensor"); 
+    return false;
+  }
+  sensors.setResolution(thermometer, resolution);
+  sensors.setWaitForConversion(false);
+  sensors.requestTemperatures();
+  delayInMillis = 750 / (1 << (12 - resolution)); 
+  lastTempRequest = millis(); 
+
+  return true;
+}
+
+void checkTemperature(unsigned long time) {
+  if (time - lastTempRequest >= delayInMillis) // waited long enough??
+  {
+//  Serial.println(F("checking temperature"));
+    checkTemperature();
+        
+    sensors.requestTemperatures(); 
+    lastTempRequest = millis(); 
+  }
+}
+
+
+void checkTemperature(void) {
+  float tempF = sensors.getTempF(thermometer);
+  tempF = (float)round(tempF*10)/10.0;
+  if ( tempF == lastTemp )
+    return;
+    
+  lastTemp = tempF;
+
+//  Serial.print("Temperature is ");
+//  Serial.println(tempF);
+
+  printCurrentTemperature();
+}
 
 bool setupWifi(void) {
   WiFi.hostname(config.host_name);
@@ -369,7 +439,10 @@ void loop(void)
   if (!isSetup)
     return;
    
+  unsigned long time = millis();
+
   checkTimeMinutes();
+  checkTemperature(time);
 
   webSocket.loop();
   server.handleClient();
@@ -459,6 +532,17 @@ void startProgram(int index, int startIndex) {
   printMode();
 
   int action = program[index].action[startIndex];
+
+  // if the room is colder than the minimum fan temperature,
+  // then don't turn the fan on
+  if (action == LOW || action == MEDIUM || action == HIGH) {
+    if (lastTemp > 0 && lastTemp < config.fan_min_temp) {
+      Serial.printf("room temp %f is below min fan temp %d\n", lastTemp, config.fan_min_temp);
+      return;
+    }
+  }
+    
+
   Serial.printf("starting program %d-%d: %d\n", (index+1), (startIndex+1), action);
   doAction(action);
   sendMqtt(action);
@@ -481,7 +565,7 @@ void doAction(int action) {
 void checkProgram(int day, int h, int m) {
   if (config.mode == OFF)
     return;
-    
+
   // check each program
   int ctime = h*60+m;
   for (int i=0; i < NUM_PROGRAMS; ++i) {
@@ -537,6 +621,7 @@ void loadConfig(void) {
     config.mqtt_ip_port = MQTT_IP_PORT;
     config.use_mqtt = 0;
     config.mode = OFF;
+    config.fan_min_temp = 72;
 
     saveConfig();
   }
@@ -552,6 +637,7 @@ void loadConfig(void) {
   Serial.printf("mqqt_ip_addr %s\n", config.mqtt_ip_addr);
   Serial.printf("mqtt_ip_port %d\n", config.mqtt_ip_port);
   Serial.printf("mode %d\n", config.mode);
+  Serial.printf("fan_min_temp %d\n", config.fan_min_temp);
 }
 
 
@@ -697,6 +783,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
       
         // send the current state
         printName();
+        printCurrentTemperature();
         printMode();
         printTime(false, false);
       }
@@ -729,6 +816,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
         sprintf(json+strlen(json), ",\"mqtt_ip_addr\":\"%s\"", config.mqtt_ip_addr);
         sprintf(json+strlen(json), ",\"mqtt_ip_port\":\"%d\"", config.mqtt_ip_port);
         sprintf(json+strlen(json), ",\"ssid\":\"%s\"", ssid.c_str());
+        sprintf(json+strlen(json), ",\"fan_min_temp\":\"%d\"", config.fan_min_temp);
         strcpy(json+strlen(json), "}");
 //        Serial.printf("len %d\n", strlen(json));
         webSocket.sendTXT(setupClient, json, strlen(json));
@@ -813,14 +901,40 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
           ptr = strstr((char *)payload, target) + strlen(target)+3;
           config.mqtt_ip_port = strtol(ptr, &ptr, 10);
 
+          target = "fan_min_temp";
+          ptr = strstr((char *)payload, target) + strlen(target)+3;
+          config.fan_min_temp = strtol(ptr, &ptr, 10);
+
           Serial.printf("host_name %s\n", config.host_name);
           Serial.printf("use_mqtt %d\n", config.use_mqtt);
           Serial.printf("mqtt_ip_addr %s\n", config.mqtt_ip_addr);
           Serial.printf("mqtt_ip_port %d\n", config.mqtt_ip_port);
+          Serial.printf("fan_min_temp %d\n", config.fan_min_temp);
           saveConfig();
         }
       }
       break;
+  }
+}
+
+
+void printCurrentTemperature() {
+  if (lastTemp < 0) {
+    return;
+  }
+  
+  char buf[7];
+  dtostrf(lastTemp, 4, 1, buf);
+
+  if (webClient != -1) {
+    sendWeb("currentTemp", buf);  
+  }
+  
+  // mqtt
+  if (config.use_mqtt) {
+    char topic[20];
+    sprintf(topic, "%s/temperature", config.host_name);
+    client.publish(topic, buf);
   }
 }
 
