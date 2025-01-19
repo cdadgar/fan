@@ -88,15 +88,19 @@ const char *weekdayNames[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 // --------------------------------------------
 
 #define DEFAULT_OUTPUT HIGH
-#define LOW 1
-#define MEDIUM 2
-#define HIGH 3
+#define FAN_OFF    0
+#define FAN_LOW    1
+#define FAN_MEDIUM 2
+#define FAN_HIGH   3
 // note: direction is not implemented
 //                 off, low, medium, high, direction, top, bottom
-byte outputs[] = { 15,  14,  13,     12,   0,         16,  5 }; 
+byte outputs[] = { 15,  14,  13,     12,   4,         16,  5 }; 
 const char *actionNames[] = {"Off", "Low", "Medium", "High", "Direction", "Top", "Bottom"};
 
+unsigned long startTime;
+int lastAction;
 bool isSetup = false;
+bool isDelaySetup = false;
 unsigned long lastMinutes;
 
 #define OFF    0
@@ -220,9 +224,11 @@ void setup(void) {
     
   lastMinutes = 0;
 
+  doAction(FAN_OFF);
+  startTime = millis();
+
   isSetup = true;
 }
-
 
 void setupOutputs(void) {
   int numOutputs = sizeof(outputs)/sizeof(outputs[0]);
@@ -441,6 +447,12 @@ void loop(void)
    
   unsigned long time = millis();
 
+  // wait 5 sec after startup to send default mqtt state
+  if (!isDelaySetup && time > (startTime + 5000)) {
+    sendMqtt(lastAction);
+    isDelaySetup = true;  
+  }
+
   checkTimeMinutes();
   checkTemperature(time);
 
@@ -535,7 +547,7 @@ void startProgram(int index, int startIndex) {
 
   // if the room is colder than the minimum fan temperature,
   // then don't turn the fan on
-  if (action == LOW || action == MEDIUM || action == HIGH) {
+  if (action == FAN_LOW || action == FAN_MEDIUM || action == FAN_HIGH) {
     if (lastTemp > 0 && lastTemp < config.fan_min_temp) {
       Serial.printf("room temp %f is below min fan temp %d\n", lastTemp, config.fan_min_temp);
       return;
@@ -555,6 +567,8 @@ void doAction(int action) {
   digitalWrite(pin, !DEFAULT_OUTPUT);
   delay(500);
   digitalWrite(pin, DEFAULT_OUTPUT);
+
+  lastAction = action;
 
   Serial.printf("action %s on gpio: %d\n", actionNames[action], pin);
   if (webClient != -1)
@@ -786,6 +800,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
         printCurrentTemperature();
         printMode();
         printTime(false, false);
+        sendWeb("status", actionNames[lastAction]);
       }
       else if (strcmp((char *)payload,"/program") == 0) {
         programClient = num;
@@ -932,7 +947,7 @@ void printCurrentTemperature() {
   
   // mqtt
   if (config.use_mqtt) {
-    char topic[20];
+    char topic[30];
     sprintf(topic, "%s/temperature", config.host_name);
     client.publish(topic, buf);
   }
